@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Events\SendNotificationEvent;
 use Illuminate\Http\Request;
 use App\Models\User;
 use Illuminate\Support\Facades\Mail;
@@ -63,13 +64,13 @@ class AuthController extends Controller
             Mail::to($request->email)->send(new OtpMail($user->otp));
             return response()->json([
                 'message' => 'Please check your email to valid your email',
-
             ]);
         }
     }
 
     public function emailVerified(Request $request)
     {
+
         $validator = Validator::make($request->all(), [
             'otp' => 'required',
         ]);
@@ -77,9 +78,15 @@ class AuthController extends Controller
         if ($validator->fails()) {
             return response(['errors' => $validator->errors()], 422);
         }
+        if ($request->otp){
+            $user = User::where('otp',$request->otp)->first();
+            if($user!=null){
+                $token = $this->guard()->login($user);
+            }
+
+        }
 
         $user = User::where('otp', $request->otp)->first();
-
 
         if (!$user) {
             return response(['message' => 'Invalid'], 422);
@@ -87,16 +94,17 @@ class AuthController extends Controller
         $user->update(['verify_email' => 1]);
         $user->update(['otp' => 0]);
         $result = app('App\Http\Controllers\NotificationController')->sendNotification('Welcome to the memorial moment app',$user->created_at,$user);
-        $admin_result = app('App\Http\Controllers\NotificationController')->sendAdminNotification('New Customer Registered',$user->created_at,$user);
+        $admin_result = app('App\Http\Controllers\NotificationController')->sendAdminNotification('New Customer Registered',$user->created_at,$user->fullName,$user);
+        event(new SendNotificationEvent('New Customer Registered',$user->created_at,$user));
         return response([
             'message' => 'Email verified successfully',
             'notification' => $result,
+            'token' => $this->respondWithToken($token),
         ]);
     }
 
     public function login(Request $request)
     {
-
         $validator = Validator::make($request->all(), [
             'email' => 'required|string|email',
             'password' => 'required|string|min:6',
@@ -104,7 +112,6 @@ class AuthController extends Controller
         if ($validator->fails()) {
             return response()->json($validator->errors(), 400);
         }
-
         $userData = User::where("email", $request->email)->first();
         //return gettype($userData->otp);
         if ($userData && Hash::check($request->password, $userData->password)) {
@@ -164,8 +171,12 @@ class AuthController extends Controller
         $user = User::where('email', $email)->first();
         if (!$user) {
             return response()->json(['error' => 'Email not found'], 401);
-        } else {
-
+        }else if($user->google_id != null || $user->apple_id != null){
+            return response()->json([
+                'message' => 'Your are social user, You do not need to forget password',
+            ],400);
+        }
+        else {
             $random = Str::random(6);
             Mail::to($request->email)->send(new OtpMail($random));
             $user->update(['otp' => $random]);
